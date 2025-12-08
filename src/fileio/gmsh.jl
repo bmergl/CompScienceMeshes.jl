@@ -381,7 +381,7 @@ function read_gmsh_mesh(io; physical=nothing, dimension=2, sort=true, T=Float64)
     # @show length(v)
     # @show length(f)
     
-    if sort
+    if sort && length(f) > 0
         # @info "sorting..."
         f = sort_sfc(v,f)
     end
