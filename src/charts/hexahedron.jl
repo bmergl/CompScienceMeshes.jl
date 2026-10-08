@@ -3,7 +3,7 @@ abstract type HexahedralElement{P} end
 
 
 # -----------------------------------------------------------------------------
-# The standard trilinearly mapped Hexahedron 
+# Trilinearly mapped Hexahedron (standard)
 # -----------------------------------------------------------------------------
 
 struct Hexahedron{P} <: HexahedralElement{P}
@@ -16,7 +16,6 @@ struct Hexahedron{P} <: HexahedralElement{P}
     p1458::P # p1 - p4 - p5 + p8 
     p1to8::P #-p1 + p2 - p3 + p4 + p5 - p6 + p7 - p8
 end
-
 Hexahedron(p1::P, p2::P, p3::P, p4::P, p5::P, p6::P, p7::P, p8::P) where P = Hexahedron{P}(
     SVector(p1, p2, p3, p4, p5, p6, p7, p8), 
     p2 - p1,
@@ -27,7 +26,6 @@ Hexahedron(p1::P, p2::P, p3::P, p4::P, p5::P, p6::P, p7::P, p8::P) where P = Hex
     p1 - p4 - p5 + p8,
     -p1 + p2 - p3 + p4 + p5 - p6 + p7 - p8
 )
-
 Hexahedron(p) = Hexahedron(p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8])
 
 function coordtype(hex::Hexahedron{P}) where P eltype(P) end
@@ -61,9 +59,6 @@ function tangents(hex::Hexahedron, u)
 end
 
 function jacobian(hex::Hexahedron, u)
-
-    #∂ru1, ∂ru2, ∂ru3 = tangents(hex, u)
-    #return dot(cross(∂ru1, ∂ru2), ∂ru3)
     J = tangents(hex, u)
     return dot(cross(J[:,1], J[:,2]), J[:,3])
 end
@@ -73,10 +68,8 @@ function jacobian_(hex::Hexahedron, ∂ru1, ∂ru2, ∂ru3)
 end
 
 
-
-
 # -----------------------------------------------------------------------------
-# The affine mapped hexahedron 
+# Affinely mapped hexahedron 
 # -----------------------------------------------------------------------------
 
 struct AffineHexahedron{P,T}  <: HexahedralElement{P}
@@ -86,32 +79,14 @@ struct AffineHexahedron{P,T}  <: HexahedralElement{P}
     c::P   # p5 - p1
     volume::T
 end
-
 function AffineHexahedron(p1::P, a::P, b::P, c::P) where P 
-
-    return AffineHexahedron{P,eltype(P)}(
-                p1, 
-                a,
-                b, 
-                c,
-                dot(cross(a, b), c)
-            )
+    return AffineHexahedron{P,eltype(P)}(p1, a, b, c, dot(cross(a, b), c))
 end
-
-# !!! does not check if the hexahedron is affine !!! Always initialize a Hexahedron
-function AffineHexahedron(p1::P, p2::P, p3::P, p4::P, p5::P, p6::P, p7::P, p8::P) where P 
-    
-    a = p2 - p1
+function AffineHexahedron(p1::P, p2::P, p3::P, p4::P, p5::P, p6::P, p7::P, p8::P) where P
+    a = p2 - p1 # No test to see if it is really affinely mapped!
     b = p4 - p1 
     c = p5 - p1
-
-    return AffineHexahedron{P,eltype(P)}(
-                p1, 
-                a,
-                b, 
-                c,
-                dot(cross(a, b), c)
-            )
+    return AffineHexahedron(p1, a, b, c)
 end
 
 function coordtype(hex::AffineHexahedron{P}) where P eltype(P) end
@@ -135,13 +110,10 @@ function vertices(hex::AffineHexahedron{P}) where P
 end
 
 function cartesian(hex::AffineHexahedron, u)
-    u1, u2, u3 = u
-    return hex.p1 + u1*hex.a + u2*hex.b + u3*hex.c
+    return hex.p1 + u[1]*hex.a + u[2]*hex.b + u[3]*hex.c
 end
 
 function tangents(hex::AffineHexahedron, u)
-
-    #return hex.a, hex.b, hex.c
 
     ∂ru1 = hex.a
     ∂ru2 = hex.b
@@ -160,8 +132,23 @@ end
 
 
 # -----------------------------------------------------------------------------
-# The reference hexahedron 
+#  RefHexahedron (for dispatch), RefHexahedron_ (for fast computation)
 # -----------------------------------------------------------------------------
+
+struct RefHexahedron_{P} <: HexahedralElement{P}
+    p1::P
+    a::P # p2-p1
+    b::P # p4-p1
+    c::P # p5-p1
+end
+
+function RefHexahedron_(p1::P, p2::P, p3::P, p4::P, p5::P, p6::P, p7::P, p8::P) where P
+    return RefHexahedron_(p1, p2-p1, p4-p1, p5-p1)
+end
+function cartesian(hex::RefHexahedron_, u)
+    return hex.p1 + u[1]*hex.a + u[2]*hex.b + u[3]*hex.c
+end
+
 
 struct RefHexahedron{T} end
 
@@ -186,7 +173,6 @@ function permute_vertices(hex::RefHexahedron, I)
 end
 
 
-
 # -----------------------------------------------------------------------------
 # Neighborhood
 # -----------------------------------------------------------------------------
@@ -203,13 +189,11 @@ function neighborhood(hex::Hexahedron, u)
     c = cartesian(hex, u)
     J = tangents(hex, u)
     j = jacobian_(hex, J[:,1], J[:,2], J[:,3])
-    
     return NeighborhoodHex(hex, u, c, J, j)
 end
 function neighborhood(hex::AffineHexahedron, u)
     c = cartesian(hex, u)
     J = tangents(hex, u)
-
     return NeighborhoodHex(hex, u, c, J, hex.volume)
 end
 
@@ -323,8 +307,28 @@ end
     
     refhex = domain(hex)
     @test typeof(refhex).parameters[1] == Float64
-    @test vertices(refhex)[5] == point(Float64, 0, 0, 1)
+    @test vertices(refhex)[5] == point(0, 0, 1)
+
+
+    I = [4,1,2,3,8,5,6,7]
+    refhex_ = CompScienceMeshes.permute_vertices(refhex, I)
+
+    @test refhex_.p1 ≈ point(0.0, 1.0, 0.0)
+    @test refhex_.a ≈ point(0.0, 0.0, 0.0) - point(0.0, 1.0, 0.0)
+    @test refhex_.b ≈ point(1.0, 1.0, 0.0) - point(0.0, 1.0, 0.0)
+    @test refhex_.c ≈ point(0.0, 0.0, 1.0) 
+
+    @test cartesian(refhex_, (0.3,0.1,0.6)) ≈ refhex_.p1 + 0.3*refhex_.a + 0.1*refhex_.b + 0.6*refhex_.c
 end
+
+
+
+
+
+
+
+
+
 
 
 
@@ -337,52 +341,13 @@ struct QuadFromHex{P,T,Q,H}  <: CompScienceMeshes.QuadrilateralElement{P}
     quad::Q  #QuadrilateralElement
     hex::H # HexahedralElement
 end
+
 function coordtype(q::QuadFromHex{P,T}) where {P,T} T end
 function vertices(q::QuadFromHex) vertices(q.quad) end
 function cartesian(q::QuadFromHex, u) cartesian(q.quad, u) end
 function tangents(q::QuadFromHex, u) tangents(q.quad,u) end
 function normal(q::QuadFromHex, u) normal(q.quad, u) end
 function jacobian(q::QuadFromHex, u) jacobian(q.quad) end
-
-
-function _quad2hexcoords(quadfromhex::QuadFromHex{P,T}, u) where {P,T}
-    index = quadfromhex.index
-    index == 1 && return (u[2], u[1], T(0))  # Quadrilateral(p1,p2,p3,p4)
-    index == 2 && return (u[1], u[2], T(1))  # Quadrilateral(p5,p6,p7,p8)
-    index == 3 && return (u[1], T(0),  u[2]) # Quadrilateral(p1,p2,p6,p5) 
-    index == 4 && return (T(1)-u[1], T(1),  u[2]) # Quadrilateral(p3,p4,p8,p7)
-    index == 5 && return (T(0), u[2], u[1])  # Quadrilateral(p1,p5,p8,p4)
-    index == 6 && return (T(1), u[1], u[2])  # Quadrilateral(p2,p3,p7,p6)
-
-    error("index=$(index), index=1...6 is allowed.")
-end
-
-
-
-function cellboundaryfacets(hex::AffineHexahedron{P}) where P
-    p = vertices(hex)
-
-    quad1 = AffineQuadrilateral(p[1],p[4],p[3],p[2])
-    quad2 = AffineQuadrilateral(p[5],p[6],p[7],p[8])
-    quad3 = AffineQuadrilateral(p[1],p[2],p[6],p[5])
-    quad4 = AffineQuadrilateral(p[3],p[4],p[8],p[7])
-    quad5 = AffineQuadrilateral(p[1],p[5],p[8],p[4])
-    quad6 = AffineQuadrilateral(p[2],p[3],p[7],p[6])
-
-    T = coordtype(hex)
-    Q = typeof(quad1)
-    H = typeof(hex)
-
-    return (
-        QuadFromHex{P,T,Q,H}(1,quad1,hex), 
-        QuadFromHex{P,T,Q,H}(2,quad2,hex), 
-        QuadFromHex{P,T,Q,H}(3,quad3,hex), 
-        QuadFromHex{P,T,Q,H}(4,quad4,hex), 
-        QuadFromHex{P,T,Q,H}(5,quad5,hex), 
-        QuadFromHex{P,T,Q,H}(6,quad6,hex)
-    )
-end
-
 
 function cellboundaryfacets(hex::Hexahedron{P}) where P
     p = vertices(hex)
@@ -408,13 +373,50 @@ function cellboundaryfacets(hex::Hexahedron{P}) where P
     )
 end
 
+function cellboundaryfacets(hex::AffineHexahedron{P}) where P
+    p = vertices(hex)
+
+    quad1 = AffineQuadrilateral(p[1],p[4],p[3],p[2])
+    quad2 = AffineQuadrilateral(p[5],p[6],p[7],p[8])
+    quad3 = AffineQuadrilateral(p[1],p[2],p[6],p[5])
+    quad4 = AffineQuadrilateral(p[3],p[4],p[8],p[7])
+    quad5 = AffineQuadrilateral(p[1],p[5],p[8],p[4])
+    quad6 = AffineQuadrilateral(p[2],p[3],p[7],p[6])
+
+    T = coordtype(hex)
+    Q = typeof(quad1)
+    H = typeof(hex)
+
+    return (
+        QuadFromHex{P,T,Q,H}(1,quad1,hex), 
+        QuadFromHex{P,T,Q,H}(2,quad2,hex), 
+        QuadFromHex{P,T,Q,H}(3,quad3,hex), 
+        QuadFromHex{P,T,Q,H}(4,quad4,hex), 
+        QuadFromHex{P,T,Q,H}(5,quad5,hex), 
+        QuadFromHex{P,T,Q,H}(6,quad6,hex)
+    )
+end
+
+function _quad2hexcoords(quadfromhex::QuadFromHex{P,T}, u) where {P,T}
+    index = quadfromhex.index
+    index == 1 && return (u[2], u[1], T(0))  # Quadrilateral(p1,p2,p3,p4)
+    index == 2 && return (u[1], u[2], T(1))  # Quadrilateral(p5,p6,p7,p8)
+    index == 3 && return (u[1], T(0),  u[2]) # Quadrilateral(p1,p2,p6,p5) 
+    index == 4 && return (T(1)-u[1], T(1),  u[2]) # Quadrilateral(p3,p4,p8,p7)
+    index == 5 && return (T(0), u[2], u[1])  # Quadrilateral(p1,p5,p8,p4)
+    index == 6 && return (T(1), u[1], u[2])  # Quadrilateral(p2,p3,p7,p6)
+
+    error("index=$(index), index=1...6 is allowed.")
+end
+
+
 # -----------------------------------------------------------------------------
-# Neighborhood - QuadrilateralElement from HexahedralElement
+# Neighborhood: QuadrilateralElement from HexahedralElement
 # -----------------------------------------------------------------------------
 
 struct NeighborhoodQuadFromHex{N1,N2}
     nbquad::N1 
-    nbhex::N2   # koordinatenkopplung!
+    nbhex::N2
 end
 
 function neighborhood(el::QuadFromHex, u) # u=(u1,u2) vom Quadrilateral
@@ -433,6 +435,9 @@ function normal(nb::NeighborhoodQuadFromHex) nb.nbquad.normal end
 function parent_neighboorhood(nb::NeighborhoodQuadFromHex) nb.nbhex end
 
 
+# -----------------------------------------------------------------------------
+# Tests
+# -----------------------------------------------------------------------------
 
 @testitem "QuadFromHex" begin
 
@@ -508,6 +513,5 @@ function parent_neighboorhood(nb::NeighborhoodQuadFromHex) nb.nbhex end
     end
 
 end
-
 
 

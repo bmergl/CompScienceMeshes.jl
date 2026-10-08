@@ -10,28 +10,29 @@ struct Quadrilateral{P} <: QuadrilateralElement{P}
     vertices::SVector{4, P}
     p21::P   # p2 - p1
     p41::P   # p4 - p1
-    p1234::P # p1 - p2 + p3 - p4
+    p1243::P # p1 - p2 - p4 + p3 
 end
-
 function Quadrilateral(p1::P, p2::P, p3::P, p4::P) where P
-    return Quadrilateral{P}(SVector(p1,p2,p3,p4), p2-p1, p4-p1, p1-p2+p3-p4)
+    return Quadrilateral{P}(SVector(p1,p2,p3,p4), p2-p1, p4-p1, p1-p2-p4+p3)
 end
 function Quadrilateral(p)
     @assert length(p) == 4
     return Quadrilateral(p[1], p[2], p[3], p[4])
 end
 
+
 function coordtype(quad::Quadrilateral{P}) where {P} eltype(P) end
+
 function vertices(quad::Quadrilateral) quad.vertices end
 
 function cartesian(quad::Quadrilateral, u)
     u1, u2 = u
-    return quad.vertices[1] + u1*quad.p21 + u2*quad.p41 + u1*u2*quad.p1234
+    return quad.vertices[1] + u1*quad.p21 + u2*quad.p41 + u1*u2*quad.p1243
 end
 
 function tangents(quad::Quadrilateral, u)
-    ∂ru = quad.p21 + u[2] * quad.p1234
-    ∂rv = quad.p41 + u[1] * quad.p1234
+    ∂ru = quad.p21 + u[2] * quad.p1243
+    ∂rv = quad.p41 + u[1] * quad.p1243
     return hcat(∂ru, ∂rv)
 end
 
@@ -57,7 +58,7 @@ end
 
 
 # -----------------------------------------------------------------------------
-#  Affine mapped Quadrilateral 
+#  Affinely mapped Quadrilateral 
 # -----------------------------------------------------------------------------
 
 struct AffineQuadrilateral{P,T} <: QuadrilateralElement{P}
@@ -68,15 +69,15 @@ struct AffineQuadrilateral{P,T} <: QuadrilateralElement{P}
     volume::T
 end
 
-
 function AffineQuadrilateral(p1::P, a::P, b::P) where P 
     cross_a_b = cross(a, b)  
 
     return AffineQuadrilateral{P,eltype(P)}(p1, a, b, normalize(cross_a_b), norm(cross_a_b))
 end
-function AffineQuadrilateral(p1::P, p2::P, p3::P, p4::P) where P # warning: no test if this is affine!
-    return AffineQuadrilateral(p1, p2 - p1, p4 - p1)
+function AffineQuadrilateral(p1::P, p2::P, p3::P, p4::P) where P
+    return AffineQuadrilateral(p1, p2 - p1, p4 - p1) # No test to see if it is really affinely mapped!
 end
+
 
 function coordtype(quad::AffineQuadrilateral{P}) where P eltype(P) end
 
@@ -107,6 +108,81 @@ function jacobian(quad::AffineQuadrilateral, u)
 end
 
 
+# -----------------------------------------------------------------------------
+#  RefQuadrilateral (for dispatch), RefQuadrilateral_ (for fast computation)
+# -----------------------------------------------------------------------------
+
+struct RefQuadrilateral_{P} <: QuadrilateralElement{P}
+    p1::P # P=SVector{2,T} intended!
+    a::P # p2-p1
+    b::P # p4-p1
+end
+function RefQuadrilateral_(p1::P, p2::P, p3::P, p4::P) where P
+    return RefQuadrilateral_{P}(p1, p2-p1, p4-p1)
+end
+function cartesian(quad::RefQuadrilateral_, u) #!!!!
+    return quad.p1 + u[1]*quad.a + u[2]*quad.b # 2D points
+end
+
+
+struct RefQuadrilateral{T} end
+
+function domain(quad::QuadrilateralElement{P}) where P return RefQuadrilateral{eltype(P)}() end
+
+function vertices(ch::RefQuadrilateral{T}) where {T}
+    SVector(
+        point(T,0,0),
+        point(T,1,0),
+        point(T,1,1),
+        point(T,0,1))
+end
+
+neighborhood(quad::RefQuadrilateral, u) = SVector(u)
+
+neighborhood(ch::RefQuadrilateral, u::AbstractVector) = SVector{length(u)}(u)
+
+function permute_vertices(ch::RefQuadrilateral, I)
+    V = vertices(ch)
+    return RefQuadrilateral_(V[I[1]], V[I[2]], V[I[3]], V[I[4]])
+end
+
+function faces(ch::RefQuadrilateral)
+    p1 = point(0,0,0)
+    p2 = point(1,0,0)
+    p3 = point(1,1,0)
+    p4 = point(0,1,0)
+    return SVector(
+        simplex(p1,p2),
+        simplex(p2,p3),
+        simplex(p3,p4),
+        simplex(p4,p1),)
+end
+
+function quadpoints(ch::RefQuadrilateral{T}, rule) where {T}
+
+    U1, W1 = legendre(rule, zero(T), one(T))
+    U2, W2 = legendre(rule, zero(T), one(T))
+
+    [(neighborhood(ch, (u1,u2)), w1*w2) for (u1,w1) in zip(U1,W1) for (u2,w2) in zip(U2,W2)]
+end
+
+function permute_vertices(q::Quadrilateral, I)
+    verts = vertices(q)[I]
+    return Quadrilateral(verts[1], verts[2], verts[3], verts[4])
+end
+
+function permute_vertices(q::AffineQuadrilateral, I)
+    verts = vertices(q)[I]
+    return AffineQuadrilateral(verts[1], verts[2], verts[3], verts[4])
+end
+
+function center(q::QuadrilateralElement)
+    T = coordtype(q)
+    h = T(0.5)
+    return neighborhood(q, (h,h))
+end
+
+
 
 # -----------------------------------------------------------------------------
 #  Neighborhood
@@ -120,7 +196,6 @@ struct NeighborhoodQuad{C,P,Q,T,J,N}
     jacobian::J
     normal::N
 end
-
 function neighborhood(quad::Quadrilateral, u)
     c = cartesian(quad, u)
     t = tangents(quad, u)
@@ -143,86 +218,6 @@ function jacobian(p::NeighborhoodQuad) p.jacobian end
 function normal(p::NeighborhoodQuad) p.normal end
 
 function neighborhood_lazy(quad::Quadrilateral, u) neighborhood(quad, u) end
-
-
-
-# -----------------------------------------------------------------------------
-#  RefQuadrilateral (for dispatch), RefQuadrilateral_ (for fast computation)
-# -----------------------------------------------------------------------------
-
-
-struct RefQuadrilateral_{P} <: QuadrilateralElement{P}
-    p1::P # P=SVector{2,T} intended!
-    a::P # p2-p1
-    b::P # p4-p1
-end
-function RefQuadrilateral_(p1::P, p2::P, p3::P, p4::P) where P
-    return RefQuadrilateral_{P}(p1, p2-p1, p4-p1)
-end
-function cartesian(quad::RefQuadrilateral_, u) #!!!!
-    return quad.p1 + u[1]*a + u[2]*b # 2D points
-end
-
-
-
-struct RefQuadrilateral{T} end
-function domain(quad::QuadrilateralElement{P}) where P return RefQuadrilateral{eltype(P)}() end
-
-function vertices(ch::RefQuadrilateral{T}) where {T}
-    SVector(
-        point(T,0,0),
-        point(T,1,0),
-        point(T,1,1),
-        point(T,0,1))
-end
-neighborhood(quad::RefQuadrilateral, u) = SVector(u)
-neighborhood(ch::RefQuadrilateral, u::AbstractVector) = SVector{length(u)}(u)
-
-function permute_vertices(ch::RefQuadrilateral, I)
-    V = vertices(ch)
-    return RefQuadrilateral_(V[I[1]], V[I[2]], V[I[3]], V[I[4]])
-end
-
-function faces(ch::RefQuadrilateral)
-    p1 = point(0,0,0)
-    p2 = point(1,0,0)
-    p3 = point(1,1,0)
-    p4 = point(0,1,0)
-    return SVector(
-        simplex(p1,p2),
-        simplex(p2,p3),
-        simplex(p3,p4),
-        simplex(p4,p1),)
-end
-
-
-function quadpoints(ch::RefQuadrilateral{T}, rule) where {T}
-
-    U1, W1 = legendre(rule, zero(T), one(T))
-    U2, W2 = legendre(rule, zero(T), one(T))
-
-    [(neighborhood(ch, (u1,u2)), w1*w2) for (u1,w1) in zip(U1,W1) for (u2,w2) in zip(U2,W2)]
-end
-
-
-function permute_vertices(q::Quadrilateral, I)
-    verts = vertices(q)[I]
-    return Quadrilateral(verts[1], verts[2], verts[3], verts[4])
-end
-function permute_vertices(q::AffineQuadrilateral, I)
-    verts = vertices(q)[I]
-    return AffineQuadrilateral(verts[1], verts[2], verts[3], verts[4])
-end
-
-function center(q::QuadrilateralElement)
-    T = coordtype(q)
-    h = T(0.5)
-    return neighborhood(q, (h,h))
-end
-
-
-
-
 
 
 # -----------------------------------------------------------------------------
@@ -308,6 +303,8 @@ end
     @test refquad_.p1 ≈ point(0.0, 1.0)
     @test refquad_.a ≈ point(0.0, 0.0) - point(0.0, 1.0)
     @test refquad_.b ≈ point(1.0, 1.0) - point(0.0, 1.0) 
+
+    @test cartesian(refquad_, (0.3,0.1)) ≈ refquad_.p1 + 0.3*refquad_.a + 0.1*refquad_.b
 end
 
 
